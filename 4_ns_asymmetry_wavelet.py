@@ -82,38 +82,40 @@ def morlet_cwt(signal: np.ndarray, dt: float = 1.0 / 12.0):
     Compute CWT power, periods, COI and 95% significance level.
     dt : sampling interval in years (default 1/12 for monthly data).
     Returns: (power, periods_yr, coi_yr, sig95)
+
+    Scale relationship (pywt with sampling_period=dt):
+        scale = center_freq * period_in_years / dt
+    where center_freq = pywt.scale2frequency(WAVELET, 1).
     """
     N = len(signal)
 
-    # Scales: cover periods from 2 months to ~200 years
-    scales = pywt.scale2frequency(WAVELET, 1) / (
-        np.logspace(np.log10(2 * dt), np.log10(200.0), 200) * dt
-    )
-    # pywt.cwt returns (coef, freqs) — freqs in cycles/sample
+    # Target periods from 6 months to ~200 years (log-spaced)
+    target_periods = np.logspace(np.log10(0.5), np.log10(200.0), 200)
+    center_freq    = pywt.scale2frequency(WAVELET, 1)
+    scales         = center_freq * target_periods / dt
+
+    # pywt.cwt returns (coef, freqs); with sampling_period=dt, freqs are in cycles/year
     coef, freqs = pywt.cwt(signal, scales, WAVELET, sampling_period=dt)
-    power  = np.abs(coef) ** 2          # shape (n_scales, N)
-    periods = 1.0 / freqs               # convert to years
+    power   = np.abs(coef) ** 2     # shape (n_scales, N)
+    periods = 1.0 / freqs           # convert to years (matches target_periods)
 
-    # Cone of influence: e-folding time for Morlet = sqrt(2) * scale
-    # scale_arr = scales / (pywt sampling convention)
-    scale_arr = pywt.scale2frequency(WAVELET, 1) / (freqs * dt)
-    e_fold    = np.sqrt(2) * scale_arr * dt          # in years
-    t_idx     = np.arange(N) * dt
-    coi       = np.minimum(t_idx, t_idx[-1] - t_idx)  # distance to nearest edge
-    coi_period = coi / np.sqrt(2)                      # simplified COI in years
+    # Cone of influence: distance from each edge, converted to equivalent period
+    t_idx      = np.arange(N) * dt                         # time array in years
+    coi        = np.minimum(t_idx, t_idx[-1] - t_idx)     # distance to nearest edge
+    coi_period = coi / np.sqrt(2)                          # COI in years (Morlet e-fold)
 
-    # Variance of signal for normalisation
-    var = np.var(signal)
+    # Normalise power by signal variance (guard against zero variance)
+    var        = max(np.var(signal), 1e-10)
     power_norm = power / var
 
-    # Red-noise background: lag-1 autocorrelation
+    # Red-noise significance: lag-1 autocorrelation background (Torrence & Compo 1998)
     ac1 = np.corrcoef(signal[:-1], signal[1:])[0, 1]
-    ac1 = max(ac1, 0.0)
+    ac1 = max(float(ac1), 0.0)
     background = np.array([
         var * (1 - ac1 ** 2) / (1 - 2 * ac1 * np.cos(2 * np.pi * dt / p) + ac1 ** 2)
         for p in periods
     ])
-    dof      = 2                       # chi-squared degrees of freedom (complex wavelet)
+    dof      = 2                       # chi-squared DOF for complex Morlet wavelet
     chisq_95 = chi2.ppf(SIGNIFICANCE_LEVEL, dof) / dof
     sig95    = np.outer(background * chisq_95 / var, np.ones(N))
 
