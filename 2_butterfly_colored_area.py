@@ -33,9 +33,10 @@ from matplotlib.cm import ScalarMappable
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 FIRST_YEAR = 1874
-LAST_YEAR  = 2024
+LAST_YEAR  = 2016          # last year of locally available data
 BASE_URL   = "https://solarscience.msfc.nasa.gov/greenwch/{year}.txt"
 CACHE_FILE = "msfc_sunspot_groups.csv"      # shared cache with Script 1
+DATA_DIR   = "greenwch"    # directory containing local <YYYY>.txt files
 
 CYCLE_MINIMA = {
     12: 1878, 13: 1889, 14: 1901, 15: 1913, 16: 1923,
@@ -46,15 +47,26 @@ CYCLE_MINIMA = {
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
 def download_year(year: int, session: requests.Session) -> pd.DataFrame:
-    url = BASE_URL.format(year=year)
-    try:
-        r = session.get(url, timeout=20)
-        r.raise_for_status()
-    except Exception:
-        return pd.DataFrame()
+    """Return one year of MSFC sunspot group data as a DataFrame.
+
+    Reads from a local file (DATA_DIR/<year>.txt) when available;
+    falls back to downloading from MSFC over the network.
+    """
+    local_path = os.path.join(DATA_DIR, f"{year}.txt")
+    if os.path.exists(local_path):
+        with open(local_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    else:
+        url = BASE_URL.format(year=year)
+        try:
+            r = session.get(url, timeout=20)
+            r.raise_for_status()
+            text = r.text
+        except Exception:
+            return pd.DataFrame()
 
     rows = []
-    for line in r.text.splitlines():
+    for line in text.splitlines():
         parts = line.split()
         if len(parts) < 8:
             continue
@@ -76,16 +88,16 @@ def download_year(year: int, session: requests.Session) -> pd.DataFrame:
 
 
 def load_data() -> pd.DataFrame:
-    """Load from shared cache (with area column) or re-download."""
+    """Load from shared cache (with area column), local files, or network."""
     if os.path.exists(CACHE_FILE):
         df = pd.read_csv(CACHE_FILE, parse_dates=["date"])
         if "area" in df.columns:
             print(f"Loading cached data from '{CACHE_FILE}' ...")
             return df[df["area"] > 0].copy()
-        # Cache lacks area column → re-download
-        print("Cache does not contain 'area' column — re-downloading ...")
+        # Cache lacks area column → re-read local files / re-download
+        print("Cache does not contain 'area' column — re-reading ...")
 
-    print(f"Downloading MSFC sunspot group data {FIRST_YEAR}–{LAST_YEAR} ...")
+    print(f"Reading MSFC sunspot group data {FIRST_YEAR}–{LAST_YEAR} ...")
     frames, session = [], requests.Session()
     for yr in range(FIRST_YEAR, LAST_YEAR + 1):
         if yr % 10 == 0:
@@ -95,7 +107,10 @@ def load_data() -> pd.DataFrame:
             frames.append(df)
 
     if not frames:
-        raise RuntimeError("No data downloaded. Check your internet connection.")
+        raise RuntimeError(
+            f"No data found. Place yearly .txt files in '{DATA_DIR}/' "
+            "or check your internet connection."
+        )
 
     data = pd.concat(frames, ignore_index=True)
     data["date"] = pd.to_datetime(data[["year", "month", "day"]])

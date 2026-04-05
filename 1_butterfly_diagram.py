@@ -28,9 +28,10 @@ import matplotlib.dates as mdates
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 FIRST_YEAR = 1874          # RGO data starts here
-LAST_YEAR  = 2024
+LAST_YEAR  = 2016          # last year of locally available data
 BASE_URL   = "https://solarscience.msfc.nasa.gov/greenwch/{year}.txt"
 CACHE_FILE = "msfc_sunspot_groups.csv"   # local cache so re-runs are fast
+DATA_DIR   = "greenwch"    # directory containing local <YYYY>.txt files
 
 # Solar cycle minima years (for annotation)
 CYCLE_MINIMA = {
@@ -42,16 +43,26 @@ CYCLE_MINIMA = {
 
 # ── Data download & parsing ────────────────────────────────────────────────────
 def download_year(year: int, session: requests.Session) -> pd.DataFrame:
-    """Download one year of MSFC sunspot group data and return a DataFrame."""
-    url = BASE_URL.format(year=year)
-    try:
-        r = session.get(url, timeout=20)
-        r.raise_for_status()
-    except Exception:
-        return pd.DataFrame()
+    """Return one year of MSFC sunspot group data as a DataFrame.
+
+    Reads from a local file (DATA_DIR/<year>.txt) when available;
+    falls back to downloading from MSFC over the network.
+    """
+    local_path = os.path.join(DATA_DIR, f"{year}.txt")
+    if os.path.exists(local_path):
+        with open(local_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    else:
+        url = BASE_URL.format(year=year)
+        try:
+            r = session.get(url, timeout=20)
+            r.raise_for_status()
+            text = r.text
+        except Exception:
+            return pd.DataFrame()
 
     rows = []
-    for line in r.text.splitlines():
+    for line in text.splitlines():
         parts = line.split()
         # Expect at least 6 whitespace-separated fields; skip header/comments
         if len(parts) < 6:
@@ -73,12 +84,12 @@ def download_year(year: int, session: requests.Session) -> pd.DataFrame:
 
 
 def load_data() -> pd.DataFrame:
-    """Load group data from local cache or download from MSFC."""
+    """Load group data from local cache, local files, or network."""
     if os.path.exists(CACHE_FILE):
         print(f"Loading cached data from '{CACHE_FILE}' ...")
         return pd.read_csv(CACHE_FILE, parse_dates=["date"])
 
-    print(f"Downloading MSFC sunspot group data {FIRST_YEAR}–{LAST_YEAR} ...")
+    print(f"Reading MSFC sunspot group data {FIRST_YEAR}–{LAST_YEAR} ...")
     frames = []
     session = requests.Session()
     for yr in range(FIRST_YEAR, LAST_YEAR + 1):
@@ -89,7 +100,10 @@ def load_data() -> pd.DataFrame:
             frames.append(df)
 
     if not frames:
-        raise RuntimeError("No data could be downloaded. Check your internet connection.")
+        raise RuntimeError(
+            f"No data found. Place yearly .txt files in '{DATA_DIR}/' "
+            "or check your internet connection."
+        )
 
     data = pd.concat(frames, ignore_index=True)
     data["date"] = pd.to_datetime(data[["year", "month", "day"]])

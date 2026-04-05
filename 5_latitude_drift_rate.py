@@ -30,9 +30,10 @@ from scipy.stats import linregress
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 FIRST_YEAR = 1874
-LAST_YEAR  = 2024
+LAST_YEAR  = 2016          # last year of locally available data
 BASE_URL   = "https://solarscience.msfc.nasa.gov/greenwch/{year}.txt"
 CACHE_FILE = "msfc_sunspot_groups.csv"
+DATA_DIR   = "greenwch"    # directory containing local <YYYY>.txt files
 
 # Solar cycle number → (minimum year, next minimum year)
 # Use mid-cycle activity window to avoid contamination from next cycle
@@ -47,15 +48,26 @@ CYCLE_BOUNDS = {
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
 def download_year(year: int, session: requests.Session) -> pd.DataFrame:
-    url = BASE_URL.format(year=year)
-    try:
-        r = session.get(url, timeout=20)
-        r.raise_for_status()
-    except Exception:
-        return pd.DataFrame()
+    """Return one year of MSFC sunspot group data as a DataFrame.
+
+    Reads from a local file (DATA_DIR/<year>.txt) when available;
+    falls back to downloading from MSFC over the network.
+    """
+    local_path = os.path.join(DATA_DIR, f"{year}.txt")
+    if os.path.exists(local_path):
+        with open(local_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    else:
+        url = BASE_URL.format(year=year)
+        try:
+            r = session.get(url, timeout=20)
+            r.raise_for_status()
+            text = r.text
+        except Exception:
+            return pd.DataFrame()
 
     rows = []
-    for line in r.text.splitlines():
+    for line in text.splitlines():
         parts = line.split()
         if len(parts) < 8:
             continue
@@ -84,7 +96,7 @@ def load_data() -> pd.DataFrame:
             df["area"] = 100.0   # fallback if cache lacks area
         return df[df["area"] > 0].copy()
 
-    print(f"Downloading MSFC data {FIRST_YEAR}–{LAST_YEAR} ...")
+    print(f"Reading MSFC data {FIRST_YEAR}–{LAST_YEAR} ...")
     frames, session = [], requests.Session()
     for yr in range(FIRST_YEAR, LAST_YEAR + 1):
         if yr % 10 == 0:
@@ -94,7 +106,10 @@ def load_data() -> pd.DataFrame:
             frames.append(df)
 
     if not frames:
-        raise RuntimeError("No data downloaded.")
+        raise RuntimeError(
+            f"No data found. Place yearly .txt files in '{DATA_DIR}/' "
+            "or check your internet connection."
+        )
 
     data = pd.concat(frames, ignore_index=True)
     data["date"] = pd.to_datetime(data[["year", "month", "day"]])

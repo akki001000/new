@@ -24,6 +24,7 @@ Requirements:
 """
 
 import io
+import os
 import requests
 import numpy as np
 import pandas as pd
@@ -33,7 +34,8 @@ import pywt
 from scipy.stats import chi2
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-SILSO_HEM_URL = "https://www.sidc.be/SILSO/DATA/SN_hem_m_tot_V2.0.txt"
+SILSO_HEM_URL    = "https://www.sidc.be/SILSO/DATA/SN_hem_m_tot_V2.0.txt"
+SILSO_LOCAL_FILE = "SN_hem_m_tot_V2.0.txt"   # local copy of the SILSO file
 SMOOTH_MONTHS = 13
 WAVELET       = "cmor1.5-1.0"      # complex Morlet: bandwidth=1.5, centre freq=1.0
 SIGNIFICANCE_LEVEL = 0.95           # 95 % confidence against red noise
@@ -41,16 +43,29 @@ SIGNIFICANCE_LEVEL = 0.95           # 95 % confidence against red noise
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
 def download_asymmetry() -> tuple[np.ndarray, np.ndarray]:
-    """Download SILSO hemispheric data, return (decimal_years, asymmetry) arrays."""
-    print(f"Downloading SILSO hemispheric data ...")
-    try:
-        r = requests.get(SILSO_HEM_URL, timeout=30)
-        r.raise_for_status()
-    except Exception as e:
-        raise RuntimeError(f"Download failed: {e}")
+    """Load SILSO hemispheric data and return (decimal_years, asymmetry) arrays.
+
+    Reads from a local file (SILSO_LOCAL_FILE) when available;
+    falls back to downloading from the SILSO server.
+    """
+    if os.path.exists(SILSO_LOCAL_FILE):
+        print(f"Loading SILSO hemispheric data from local file: {SILSO_LOCAL_FILE}")
+        with open(SILSO_LOCAL_FILE, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    else:
+        print("Downloading SILSO hemispheric data ...")
+        try:
+            r = requests.get(SILSO_HEM_URL, timeout=30)
+            r.raise_for_status()
+            text = r.text
+        except Exception as e:
+            raise RuntimeError(
+                f"Download failed: {e}\n"
+                f"Alternatively, place '{SILSO_LOCAL_FILE}' in the working directory."
+            )
 
     rows = []
-    for line in r.text.splitlines():
+    for line in text.splitlines():
         parts = line.split()
         if len(parts) < 6:
             continue
